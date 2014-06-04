@@ -1,0 +1,2 @@
+The entropy of English letters is 4.17086491107289
+The entropy of Chinese characters is 9.665541472638903
