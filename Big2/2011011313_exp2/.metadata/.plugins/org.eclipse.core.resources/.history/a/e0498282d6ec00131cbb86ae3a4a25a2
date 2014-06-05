@@ -1,0 +1,487 @@
+import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Stack;
+
+import javax.imageio.ImageIO;
+
+
+public class CBIR {
+	
+	private String baseDir = "./res/AllImages.txt";
+	private ArrayList<String> base;
+	private ArrayList<double[]> baseValue;
+	
+	private String queryDir = "./res/QueryImages.txt";
+	private ArrayList<String> query;
+	
+	private int[][][] getRGBs(String dir) {
+		File img = new File(dir);
+		BufferedImage bimg = null;
+		try {
+			bimg = ImageIO.read(img);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		int row = bimg.getHeight();
+		int col = bimg.getWidth();
+		
+		//System.out.println("test");
+		int[][][] ret = new int[row][][];
+		for (int i = 0; i < row; i ++) {
+			ret[i] = new int[col][];
+			for (int j = 0; j < col; j ++) {
+				ret[i][j] = getRGB(bimg, i, j);
+			}
+		}
+		
+		return ret;
+	}
+	
+	private double[] getBin(int[][][] rgbs, int tag) {
+		int row = rgbs.length;
+		int col = rgbs[0].length;
+		
+		double[] res = null;
+		if (tag == 0) {
+			res = new double[16];
+			for (int i = 0; i < 16; i ++) {
+				res[i] = 0;
+			}
+		} else {
+			res = new double[128];
+			for (int i = 0; i < 128; i ++) {
+				res[i] = 0;
+			}
+		}
+		
+		if (tag == 0) { // 2:4:2
+			for (int i = 0; i < row; i ++) {
+				for (int j = 0; j < col; j ++) {
+					int r, g, b;
+					r = rgbs[i][j][0] / 128;
+					g = rgbs[i][j][1] / 64;
+					b = rgbs[i][j][2] / 128;
+					int index = r + 2*g + 8*b;
+					res[index] ++;
+				}
+			}
+		} else { // 4:8:4
+			for (int i = 0; i < row; i ++) {
+				for (int j = 0; j < col; j ++) {
+					int r, g, b;
+					r = rgbs[i][j][0] / 64;
+					g = rgbs[i][j][1] / 32;
+					b = rgbs[i][j][2] / 64;
+					int index = r + 4*g + 32*b;
+					res[index] ++;
+				}
+			}
+		}
+		
+		int length = (tag==0) ? 16:128;
+		double x = row*col;
+		
+		for (int i = 0; i < length; i ++) {
+			res[i] /= x;
+		}
+		
+		return res;
+	}
+	
+	private double getL2distance(double[] vector, double[] ds) {
+		int length = vector.length;
+		double sum = 0;
+		for (int i = 0; i < length; i ++) {
+			double x = vector[i] - ds[i];
+			sum += x * x;
+		}
+		return Math.sqrt(sum);
+	}
+	
+	private double getHIdistance(double[] vector, double[] ds) {
+		int row = vector.length;
+		
+		double sum = 0;
+		for (int i = 0; i < row; i ++) {
+			double x = mim(vector[i], ds[i]);
+			sum += x;
+		}
+		return 1 - sum;
+	}
+	
+	private double getBhdistance(double[] vector, double[] ds) {
+		int row = vector.length;
+		
+		double sum = 0;
+		for (int i = 0; i < row; i ++) {
+			double x = vector[i]*ds[i];
+			sum += Math.sqrt(x);
+		}
+		return (1-sum)>0 ? Math.sqrt(1-sum) : 0;
+	}
+	
+	private double mim(double a, double b) {
+		if (a < b) {
+			return a;
+		} else 
+			return b;
+	}
+	
+	public void process(int tag) {
+		base = null;
+		baseValue = null;
+		query = null;
+		
+		String p = tag==0 ? "16bins/" : "128bins/";
+		String prec = "./res/result/" + p;
+		try {
+			BufferedReader reader = new BufferedReader(new InputStreamReader(
+					new FileInputStream(baseDir)));
+			String tmp;
+			base = new ArrayList<String>();
+			while ((tmp = reader.readLine()) != null) {
+				if (tmp.trim().equals("")) {
+					continue;
+				}
+				String[] slist = tmp.split(" ");
+				base.add("./res/DataSet/" + slist[0]);
+				//System.out.println("'" + slist[0] + "'");
+			}
+			reader.close();
+			
+			reader = new BufferedReader(new InputStreamReader(
+					new FileInputStream(queryDir)));
+			query = new ArrayList<String>();
+			while ((tmp = reader.readLine()) != null) {
+				if (tmp.trim().equals("")) {
+					continue;
+				}
+				String[] slist = tmp.split(" ");
+				query.add("./res/DataSet/" + slist[0]);
+			}
+			reader.close();
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		baseValue = new ArrayList<double[]>();
+		for (String d : base) {
+			baseValue.add(getBin(getRGBs(d), tag));
+		}
+		//System.out.println("preprocess done!");
+		
+		double[][] rankl2 = new double[base.size()][];
+		double[][] rankhi = new double[base.size()][];
+		double[][] rankbh = new double[base.size()][];
+		for (int i = 0; i < base.size(); i ++) {
+			rankl2[i] = new double[2];
+			rankhi[i] = new double[2];
+			rankbh[i] = new double[2];
+		};
+		ArrayList<Double> l2p = new ArrayList<Double>();
+		ArrayList<Double> hip = new ArrayList<Double>();
+		ArrayList<Double> bhp = new ArrayList<Double>();
+		
+		for (String q : query) {
+			String name = q.substring(14, q.length());
+			String target = getTarget(name);
+			name = name.replace("/", "_");
+			name = "res_" + name.replace("Image", "");
+			name = name.replace("jpg", "txt");
+			if (!name.endsWith("txt")) {
+				System.out.println("error!");
+			}
+			double[] vector = getBin(getRGBs(q), tag);
+			
+
+			for (int i = 0; i < base.size(); i ++) {
+				rankl2[i][0] = i;
+				rankhi[i][0] = i;
+				rankbh[i][0] = i;
+				rankl2[i][1] = this.getL2distance(vector, baseValue.get(i));
+				rankhi[i][1] = this.getHIdistance(vector, baseValue.get(i));
+				rankbh[i][1] = this.getBhdistance(vector, baseValue.get(i));
+			}
+			quickSort(rankl2, 0, rankl2.length-1);
+			quickSort(rankhi, 0, rankhi.length-1);
+			quickSort(rankbh, 0, rankbh.length-1);
+			
+			String prefix = "./res/result/" + p;
+			
+			// L2 distance
+			String l2name = prefix + "L2/" + name;
+			File file = new File(l2name);
+			if (!file.exists()) {
+				try {
+					File parent = file.getParentFile(); 
+					if (parent != null && !parent.exists()){ 
+						parent.mkdirs(); 
+					}
+					file.createNewFile();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+			try {
+				BufferedWriter writer = new BufferedWriter(new FileWriter(l2name));
+				for (int i = 0; i < 30; i ++) {
+					String t = base.get((int)rankl2[i][0]);
+					writer.write(t.substring(14, t.length()) + " " + rankl2[i][1] + "\n");
+				}
+				writer.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			l2p.add(this.getPrec(target, base, rankl2));
+			//System.out.print("l2 ");
+			// hi distance
+			String hiname = prefix + "hi/" + name;
+			file = new File(hiname);
+			if (!file.exists()) {
+				try {
+					File parent = file.getParentFile(); 
+					if (parent != null && !parent.exists()){ 
+						parent.mkdirs(); 
+					}
+					file.createNewFile();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+			
+			try {
+				BufferedWriter writer = new BufferedWriter(new FileWriter(hiname));
+				for (int i = 0; i < 30; i ++) {
+					String t = base.get((int)rankhi[i][0]);
+					writer.write(t.substring(14, t.length()) + " " + rankhi[i][1] + "\n");
+				}
+				writer.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			hip.add(this.getPrec(target, base, rankhi));
+			//System.out.print("HI ");
+			// bh distance
+			String bhname = prefix + "bh/" + name;
+			file = new File(bhname);
+			if (!file.exists()) {
+				try {
+					File parent = file.getParentFile(); 
+					if (parent != null && !parent.exists()){ 
+						parent.mkdirs(); 
+					}
+					file.createNewFile();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+			
+			try {
+				BufferedWriter writer = new BufferedWriter(new FileWriter(bhname));
+				for (int i = 0; i < 30; i ++) {
+					String t = base.get((int)rankbh[i][0]);
+					writer.write(t.substring(14, t.length()) + " " + rankbh[i][1] + "\n");
+				}
+				writer.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			bhp.add(this.getPrec(target, base, rankbh));
+			//System.out.print("bh ");
+			//System.out.println("query " + name + " done!");
+		}
+		
+		String name = null;
+		File file = null;
+		// l2
+		name = prec + "L2/res_overall.txt";
+		file = new File(name);
+		if (!file.exists()) {
+			try {
+				File parent = file.getParentFile(); 
+				if (parent != null && !parent.exists()){ 
+					parent.mkdirs(); 
+				}
+				file.createNewFile();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		try {
+			BufferedWriter writer = new BufferedWriter(new FileWriter(name));
+			double sum = 0;
+			for (int i = 0; i < query.size(); i ++) {
+				String s = query.get(i);
+				writer.write(s.substring(14, s.length()) + " " + l2p.get(i) + "\n");
+				sum += l2p.get(i);
+			}
+			writer.write(sum/query.size() + "\n");
+			System.out.println(sum/query.size());
+			writer.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		// hi
+		name = prec + "hi/res_overall.txt";
+		file = new File(name);
+		if (!file.exists()) {
+			try {
+				File parent = file.getParentFile(); 
+				if (parent != null && !parent.exists()){ 
+					parent.mkdirs(); 
+				}
+				file.createNewFile();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		try {
+			BufferedWriter writer = new BufferedWriter(new FileWriter(name));
+			double sum = 0;
+			for (int i = 0; i < query.size(); i ++) {
+				String s = query.get(i);
+				writer.write(s.substring(14, s.length()) + " " + hip.get(i) + "\n");
+				sum += hip.get(i);
+			}
+			writer.write(sum/query.size() + "\n");
+			System.out.println(sum/query.size());
+			writer.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		// bh
+		name = prec + "bh/res_overall.txt";
+		file = new File(name);
+		if (!file.exists()) {
+			try {
+				File parent = file.getParentFile(); 
+				if (parent != null && !parent.exists()){ 
+					parent.mkdirs(); 
+				}
+				file.createNewFile();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		try {
+			BufferedWriter writer = new BufferedWriter(new FileWriter(name));
+			double sum = 0;
+			for (int i = 0; i < query.size(); i ++) {
+				String s = query.get(i);
+				writer.write(s.substring(14, s.length()) + " " + bhp.get(i) + "\n");
+				sum += bhp.get(i);
+			}
+			writer.write(sum/query.size() + "\n");
+			System.out.println(sum/query.size());
+			writer.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+	}
+	
+	private String getTarget(String input) {
+		int posi = input.indexOf("/");
+		return input.substring(0, posi);
+	}
+	
+	private double getPrec(String tar, ArrayList<String> list, double[][] index) {
+		double sum = 0;
+		for (int i = 0; i < 30; i ++) {
+			String t = list.get((int)index[i][0]);
+			t = t.substring(14, t.length());
+			if (t.startsWith(tar)) {
+				sum += 1;
+			}
+		}
+		return sum/30;
+	}
+	
+	private void quickSort(double[][] imgs, int low, int high) {
+		if (low < high) {
+			//System.out.println("quick");
+			Stack<Integer> stack = new Stack<Integer>();
+			stack.push(low);
+			stack.push(high);
+			while(!stack.isEmpty()) {
+				
+				int right = stack.pop();
+				int left = stack.pop();
+				if (right <= left) {
+					continue;
+				}
+				int i = partition(imgs, left, right);
+				if (right > i + 1) {
+					stack.push(i + 1);
+					stack.push(right);
+				}
+				if (left < i - 1) {
+					stack.push(left);
+					stack.push(i - 1);
+				}
+			}
+		}
+	}
+	
+	private int partition(double[][] imgs, int low, int high) {
+		
+		double a = imgs[low][0];
+		double b = imgs[low][1];
+		while (low < high) {
+			while (imgs[high][1] >= b && high > low) {
+				high --;
+			}
+			imgs[low][0] = imgs[high][0];
+			imgs[low][1] = imgs[high][1];
+			
+			while (imgs[low][1] <= b && high > low) {
+				low ++;
+			}
+			imgs[high][0] = imgs[low][0];
+			imgs[high][1] = imgs[low][1];
+		}
+		imgs[low][0] = a;
+		imgs[low][1] = b;
+		return low;
+	}
+	
+	public static int[] getRGB(BufferedImage image, int x, int y){
+        int[] rgb = new int [3];
+        //System.out.println(x + " " + y);
+        int pixel = image.getRGB(y, x);
+        rgb[0] = (pixel & 0xff0000) >> 16;
+        rgb[1] = (pixel & 0xff00) >> 8;
+        rgb[2] = (pixel & 0xff);
+        return  rgb;
+    }
+	
+	public static void main(String args[]) {
+		CBIR cbir = new CBIR();
+		cbir.process(0);
+		cbir.process(1);
+	}
+}
