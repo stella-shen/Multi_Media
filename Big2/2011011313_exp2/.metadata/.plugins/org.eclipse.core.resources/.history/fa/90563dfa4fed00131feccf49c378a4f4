@@ -1,0 +1,447 @@
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.awt.image.BufferedImage;
+import java.util.*;
+import javax.imageio.ImageIO;
+
+public class exp2 {
+	private static String queryFile = "./QueryImages.txt";
+	private static String allImgFile = "./AllImages.txt";
+	private static String ans_file = "./ans_file/";
+	
+	private static double dis_L2(double[] a, double[] b, int len) {
+		double sum = 0;
+		for(int i = 0; i < len; i ++) {
+			sum = sum + Math.pow(a[i] - b[i], 2.0);
+		}
+		double ret = Math.sqrt(sum);
+		return ret;
+	}
+	
+	private static double dis_HI(double[] a, double[] b, int len) {
+		double sum = 0;
+		double sum1 = 0;
+		for(int i = 0; i < len; i ++) {
+			sum = sum + (a[i] <= b[i] ? a[i] : b[i]);
+			sum1 = sum1 + b[i];
+		}
+		return 1 - sum / sum1;
+	}
+	
+	private static double dis_bh(double[] a, double[] b, int len) {
+		double sum = 0;
+		for(int i = 0; i < len; i++) {
+			sum = sum + Math.sqrt(a[i] * b[i]);
+		}
+		if(1 - sum >= 0) {
+			return Math.sqrt(1 - sum);
+		} else {
+			return 0;
+		}
+	}
+	
+	private static double dis_ch(double[] a, double[] b, int len) {
+		double sum = 0;
+		for(int i = 0; i < len; i++) {
+			if(a[i] + b[i] != 0) {
+				sum = sum + (a[i] - b[i]) / (a[i] + b[i]) * (a[i] - b[i]);
+			}
+		}
+		return sum;
+	}
+	
+	private static double[] getBins(String path, int flag) {
+		File file = new File(path);
+		BufferedImage img = null;
+		double bins[] = null;
+		if(flag == 16) {
+			bins = new double[16];
+			for(int i = 0; i < 16; i++) {
+				bins[i] = 0;
+			}
+		} else {
+			bins = new double[128];
+			for(int i = 0; i < 128; i++) {
+				bins[i] = 0;
+			}
+		}
+		try {
+			img = ImageIO.read(file);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		int row_len = img.getWidth();
+		int col_len = img.getHeight();
+		int size = row_len * col_len;
+		for(int i = 0; i < row_len; i++) {
+			for(int j = 0; j < col_len; j++) {
+				int color = img.getRGB(i, j);
+				int red = color >> 16 & 0xff;
+				int green = color >> 8 & 0xff;
+				int blue = color & 0xff;
+				if(flag == 16) {
+					red = red / 128;
+					green = green / 64;
+					blue = blue / 128;
+					bins[red + 2 * green + 2 * 4 * blue] += 1;
+				} else {
+					red = red / 64;
+					green = green / 32;
+					blue = blue / 64;
+					bins[red + 4 * green + 4 * 8 * blue] += 1;
+				}
+			}
+		}
+		
+		for(int i = 0; i < flag; i ++) {
+			bins[i] = bins[i] / size;
+		}
+		return bins;
+	}
+	
+	private static void qsort(int low, int high, double[][] array) {
+		int i = low , j = high;
+		double temp0 = array[low][0];
+		double temp1 = array[low][1];
+		while(i < j)
+		{
+			while(i < j && temp1 <= array[j][1])
+				j --;
+			array[i][0] = array[j][0];
+			array[i][1] = array[j][1];
+			while(i < j && array[i][1] <= temp1)
+				i ++;
+			array[j][0] = array[i][0];
+			array[j][1] = array[i][1];
+		}
+		array[i][0] = temp0;
+		array[i][1] = temp1;
+		//System.out.println("here");
+		if(low < i - 1)
+			qsort(low , i - 1 , array);
+		if(high > i + 1)
+			qsort(i + 1 , high , array);
+	}
+	
+	private static double accuracy(ArrayList<String> s, String cls) {
+		double right = 0;
+		for(int i = 0; i < s.size(); i++) {
+			String cur_cls = s.get(i);
+			if(cur_cls.equals(cls)) {
+				right = right + 1;
+			}
+		}
+		return right / 30.0;
+	}
+	
+	private static String normalizeName(String name) {
+		String ans;
+		ans = name.replace("jpg", "");
+		ans = ans + "txt";
+		ans = ans.replace('/', '_');
+		ans = "res_" + ans.replace("Image", "");
+		return ans;
+	}
+	
+	private static void checkExist(File fileName) {
+		if(fileName.exists()) {
+			return;
+		} else{
+			//File parentDir = fileName.getParentFile();
+			//if(!parentDir.exists() && parentDir != null) {
+				fileName.mkdirs();
+			//}
+			/*try {
+				fileName.createNewFile();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}*/
+		}
+	}
+	
+	private static void subMain(int flag) {
+		String ansFilePre = ans_file + String.valueOf(flag) +"bins_";
+		BufferedReader reader = null;
+		ArrayList<String> imgFiles = new ArrayList<String>();
+		ArrayList<String> qFiles = new ArrayList<String>();
+		double[] L2Accuracy;
+		double[] HIAccuracy;
+		double[] bhAccuracy;
+		double[] chAccuracy;
+		try {
+			reader = new BufferedReader(new InputStreamReader(new FileInputStream(allImgFile)));
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		}
+		String line = null;
+		try {
+			while((line = reader.readLine()) != null) {
+				if(line.trim().isEmpty()) {
+					continue;
+				}
+				String[] words = line.trim().split(" ");
+				imgFiles.add("./DataSet/" + words[0]);
+			}
+			reader.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		try {
+			reader = new BufferedReader(new InputStreamReader(new FileInputStream(queryFile)));
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		}
+		line = null;
+		try {
+			while((line = reader.readLine()) != null) {
+				if(line.trim().isEmpty()) {
+					continue;
+				}
+				String[] words = line.trim().split(" ");
+				qFiles.add("./DataSet/" + words[0]);
+			}
+			reader.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		L2Accuracy = new double[qFiles.size()];
+		HIAccuracy = new double[qFiles.size()];
+		bhAccuracy = new double[qFiles.size()];
+		chAccuracy = new double[qFiles.size()];
+		//System.out.println(imgFiles.size());
+		double[][] L2Dis;
+		double[][] HIDis;
+		double[][] bhDis;
+		double[][] chDis;
+		int cur_len = imgFiles.size();
+		L2Dis = new double[cur_len][];
+		HIDis = new double[cur_len][];
+		bhDis = new double[cur_len][];
+		chDis = new double[cur_len][];
+		for(int i = 0; i < qFiles.size(); i++) {
+			String cur_q = qFiles.get(i);
+			//System.out.println(i);
+			double[] cur_bins = getBins(cur_q, flag);
+			for(int j = 0; j < cur_len; j++) {
+				L2Dis[j] = new double[2];
+				HIDis[j] = new double[2];
+				bhDis[j] = new double[2];
+				chDis[j] = new double[2];
+				double[] img_bins = getBins(imgFiles.get(j), flag);
+				L2Dis[j][0] = j;
+				HIDis[j][0] = j;
+				bhDis[j][0] = j;
+				chDis[j][0] = j;
+				L2Dis[j][1] = dis_L2(cur_bins, img_bins, img_bins.length);
+				HIDis[j][1] = dis_HI(cur_bins, img_bins, img_bins.length);
+				bhDis[j][1] = dis_bh(cur_bins, img_bins, img_bins.length);
+				chDis[j][1] = dis_ch(cur_bins, img_bins, img_bins.length);
+			}
+			//System.out.println(i);
+			qsort(0, L2Dis.length - 1, L2Dis);
+			qsort(0, HIDis.length - 1, HIDis);
+			qsort(0, bhDis.length - 1, bhDis);
+			//for(int j = 0; j < chDis.length; j++)
+				//System.out.println(chDis[j][1]);
+			//System.out.println(i);
+			qsort(0, chDis.length - 1, chDis);
+			//System.out.println(i);
+			
+			String name = cur_q.substring(10);
+			String cls = name.substring(0, name.indexOf('/'));
+			//System.out.println(cls);
+			name = normalizeName(name);
+			//write to files
+			//ordered list
+			try {
+				//L2
+				String orderedList = ansFilePre + "orderedLists/";
+				String L2Path = orderedList + "L2/" + name;
+				File L2file = new File(L2Path);
+				checkExist(L2file);
+				BufferedWriter writer = new BufferedWriter(new FileWriter(L2Path));
+				for(int j = 0; j < L2Dis.length; j++) {
+					String cur_res = imgFiles.get((int)L2Dis[j][0]).substring(10);
+					//System.out.println(L2Dis[j][1]);
+					writer.write(cur_res + " " + L2Dis[j][1] + "\n");
+				}
+				writer.close();
+				//HI
+				String HIPath = orderedList + "HI/" + name;
+				File HIfile = new File(HIPath);
+				checkExist(HIfile);
+				writer = new BufferedWriter(new FileWriter(HIPath));
+				for(int j = 0; j < HIDis.length; j++) {
+					String cur_res = imgFiles.get((int)HIDis[j][0]).substring(10);
+					//System.out.println(HIDis[j][1]);
+					writer.write(cur_res + " " + HIDis[j][1] + "\n");
+				}
+				writer.close();
+				//bh
+				String bhPath = orderedList + "bh/" + name;
+				File bhfile = new File(bhPath);
+				checkExist(bhfile);
+				writer = new BufferedWriter(new FileWriter(bhPath));
+				for(int j = 0; j < bhDis.length; j++) {
+					String cur_res = imgFiles.get((int)bhDis[j][0]).substring(10);
+					//System.out.println(bhDis[j][1]);
+					writer.write(cur_res + " " + bhDis[j][1] + "\n");
+				}
+				writer.close();
+				//ch
+				String chPath = orderedList + "ch/" + name;
+				File chfile = new File(chPath);
+				checkExist(chfile);
+				writer = new BufferedWriter(new FileWriter(chPath));
+				for(int j = 0; j < chDis.length; j++) {
+					String cur_res = imgFiles.get((int)chDis[j][0]).substring(10);
+					//System.out.println(chDis[j][1]);
+					writer.write(cur_res + " " + chDis[j][1] + "\n");
+				}
+				writer.close();
+				
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			//System.out.println("L2 Ordered List Write finished!");
+			//System.out.println("HI Ordered List Write finished!");
+			//System.out.println("bh Ordered List Write finished!");
+			//System.out.println("ch Ordered List Write finished!");
+			
+			//First 30
+			String selectedList = ansFilePre + "selectedLists/";
+			ArrayList<String> L2Acc = new ArrayList<String>();
+			ArrayList<String> HIAcc = new ArrayList<String>();
+			ArrayList<String> bhAcc = new ArrayList<String>();
+			ArrayList<String> chAcc = new ArrayList<String>();
+		
+			try {
+				//L2
+				String L2Path = selectedList + "L2/" + name;
+				File L2file = new File(L2Path);
+				checkExist(L2file);
+				BufferedWriter writer = new BufferedWriter(new FileWriter(L2Path));
+				for(int j = 0; j < 30; j++) {
+					String cur_res = imgFiles.get((int)L2Dis[j][0]).substring(10);
+					int index = cur_res.indexOf('/');
+					L2Acc.add(cur_res.substring(0, index));
+					//System.out.println(cur_res.substring(0, index));
+					writer.write(cur_res + " " + L2Dis[j][1] + "\n");
+				}
+				double cur_accuracy = accuracy(L2Acc, cls);
+				L2Accuracy[i] = cur_accuracy;
+				writer.close();
+				//HI
+				String HIPath = selectedList + "HI/" + name;
+				File HIfile = new File(HIPath);
+				checkExist(HIfile);
+				writer = new BufferedWriter(new FileWriter(HIPath));
+				for(int j = 0; j < 30; j++) {
+					String cur_res = imgFiles.get((int)HIDis[j][0]).substring(10);
+					int index = cur_res.indexOf('/');
+					HIAcc.add(cur_res.substring(0, index));
+					writer.write(cur_res + " " + HIDis[j][1] + "\n");
+				}
+				cur_accuracy = accuracy(HIAcc, cls);
+				HIAccuracy[i] = cur_accuracy;
+				writer.close();
+				//bh
+				String bhPath = selectedList + "bh/" + name;
+				File bhfile = new File(bhPath);
+				checkExist(bhfile);
+				writer = new BufferedWriter(new FileWriter(bhPath));
+				for(int j = 0; j < 30; j++) {
+					String cur_res = imgFiles.get((int)bhDis[j][0]).substring(10);
+					int index = cur_res.indexOf('/');
+					bhAcc.add(cur_res.substring(0, index));
+					writer.write(cur_res + " " + bhDis[j][1] + "\n");
+				}
+				cur_accuracy = accuracy(bhAcc, cls);
+				bhAccuracy[i] = cur_accuracy;
+				writer.close();
+				//ch
+				String chPath = selectedList + "ch/" + name;
+				File chfile = new File(chPath);
+				checkExist(chfile);
+				writer = new BufferedWriter(new FileWriter(chPath));
+				for(int j = 0; j < 30; j++) {
+					String cur_res = imgFiles.get((int)chDis[j][0]).substring(10);
+					int index = cur_res.indexOf('/');
+					chAcc.add(cur_res.substring(0, index));
+					writer.write(cur_res + " " + chDis[j][1] + "\n");
+				}
+				cur_accuracy = accuracy(chAcc, cls);
+				chAccuracy[i] = cur_accuracy;
+				writer.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			//System.out.println("L2 Selected List Write finished!");
+		}
+		
+		try {
+			//L2 res_file
+			String L2_res_dir = ansFilePre + "selectedLists/" + "L2/" + "res_overall.txt";
+			BufferedWriter writer = new BufferedWriter(new FileWriter(L2_res_dir));
+			double sum = 0;
+			for(int i = 0; i < qFiles.size(); i++) {
+				writer.write(qFiles.get(i) + " " + L2Accuracy[i] + "\n");
+				sum = sum + L2Accuracy[i];
+			}
+			double average = sum / qFiles.size();
+			writer.write(String.valueOf(average) + "\n");
+			writer.close();
+			//HI res_file
+			String HI_res_dir = ansFilePre + "selectedLists/" + "HI/" + "res_overall.txt";
+			writer = new BufferedWriter(new FileWriter(HI_res_dir));
+			sum = 0;
+			for(int i = 0; i < qFiles.size(); i++) {
+				writer.write(qFiles.get(i) + " " + HIAccuracy[i] + "\n");
+				sum = sum + HIAccuracy[i];
+			}
+			average = sum / qFiles.size();
+			writer.write(String.valueOf(average) + "\n");
+			writer.close();
+			//bh res_file
+			String bh_res_dir = ansFilePre + "selectedLists/" + "bh/" + "res_overall.txt";
+			writer = new BufferedWriter(new FileWriter(bh_res_dir));
+			sum = 0;
+			for(int i = 0; i < qFiles.size(); i++) {
+				writer.write(qFiles.get(i) + " " + bhAccuracy[i] + "\n");
+				sum = sum + bhAccuracy[i];
+			}
+			average = sum / qFiles.size();
+			writer.write(String.valueOf(average) + "\n");
+			writer.close();
+			//ch res_file
+			String ch_res_dir = ansFilePre + "selectedLists/" + "ch/" + "res_overall.txt";
+			writer = new BufferedWriter(new FileWriter(ch_res_dir));
+			sum = 0;
+			for(int i = 0; i < qFiles.size(); i++) {
+				writer.write(qFiles.get(i) + " " + chAccuracy[i] + "\n");
+				sum = sum + chAccuracy[i];
+			}
+			average = sum / qFiles.size();
+			writer.write(String.valueOf(average) + "\n");
+			writer.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	
+	public static void main(String args[]) {
+		subMain(16);
+		System.out.println("16 bins write finished!");
+		subMain(128);
+		System.out.println("128 bins write finished!");
+	}
+}
